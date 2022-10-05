@@ -1,5 +1,4 @@
-#!/usr/bin/python
-#
+#!/usr/bin/env python
 # Audio spectrum analyzer
 
 # Copyright (c) 2011, 2022 Michael Robinson
@@ -24,12 +23,12 @@
 #
 # Version 0.1
 
-import gtk
+import cairo
+import gi
+gi.require_version("Gtk","3.0")
+gi.require_version("Gst","1.0")
+from gi.repository import GObject, Gtk, Gdk, Gst
 
-import gobject
-import pygst
-pygst.require("0.10")
-import gst
 import time
 import struct
 import numpy
@@ -63,15 +62,15 @@ class gtkSpec:
         return False
 
     def destroy_event(self, data=None):
-        self.pipeline.set_state(gst.STATE_NULL)
-        gtk.main_quit()
+        self.pipeline.set_state(Gst.State.NULL)
+        Gtk.main_quit()
 
     def buffer_cb(self, buffer, pad, user_data):
-        gtk.gdk.threads_enter()
+        Gdk.threads_enter()
 
         # Unpack and FFT data
         self.data=numpy.array([x*190.0/2.0**16 for x in unpack(pad)])
-        gtk.gdk.threads_leave()
+        Gdk.threads_leave()
 
         return True
         
@@ -80,14 +79,14 @@ class gtkSpec:
             return False
 
         self.updating=True
-        gtk.gdk.threads_enter()
+        Gdk.threads_enter()
         
         self.dataBlock=numpy.concatenate((self.dataBlock[self.blockSize/2:],self.data))
         data_fft=fft(self.dataBlock)
 
         # Color state
         style=self.screen.get_style()
-        gc=style.fg_gc[gtk.STATE_NORMAL]
+        gc=style.fg_gc[Gtk.State.NORMAL]
         gc_oldfg = gc.foreground
 
         # Erase current display
@@ -132,7 +131,7 @@ class gtkSpec:
         if( self.mode == 3 ):
             self.spectrogram[1:379,:]=self.spectrogram[0:378,:]
             self.spectrogram[0,:]=data*2
-            self.pixmap.draw_gray_image(gc,0,0,511,380,gtk.gdk.RGB_DITHER_NONE,self.spectrogram.astype('uint8'),511)
+            self.pixmap.draw_gray_image(gc,0,0,511,380,Gdk.RGB_DITHER_NONE,self.spectrogram.astype('uint8'),511)
         else:
             self.spectrogram=numpy.zeros((380,511))
 
@@ -167,11 +166,11 @@ class gtkSpec:
         gc.foreground=gc_oldfg
 
         # Update the window
-        self.screen.window.draw_drawable(self.screen.get_style().fg_gc[gtk.STATE_NORMAL],
+        self.screen.window.draw_drawable(self.screen.get_style().fg_gc[Gtk.State.NORMAL],
                                          self.pixmap, 0, 0, 0, 0, 512, 380)
 
         self.updating=False
-        gtk.gdk.threads_leave()
+        Gdk.threads_leave()
         return True
 
     def swapmode(self,event):
@@ -204,7 +203,7 @@ class gtkSpec:
         return True
 
     def __init__(self):
-        self.window = gtk.Window()
+        self.window = Gtk.Window()
 
         self.updating = False
 
@@ -212,7 +211,7 @@ class gtkSpec:
         self.blockSize=2048
         self.blocks=1
         self.sampleRate=44100
-        self.dataBlock=numpy.zeros(self.blocks*self.blockSize/2)
+        self.dataBlock=numpy.zeros(int(self.blocks*self.blockSize/2))
         self.spectrogram=numpy.zeros((380,511))
 
         # Window boilerplate
@@ -222,10 +221,10 @@ class gtkSpec:
         self.window.set_border_width(5)
 
         # Display area boilerplate
-        self.screen=gtk.DrawingArea()
+        self.screen=Gtk.DrawingArea()
         self.screen.set_size_request(512,380)
         self.screen.connect("button_press_event",self.button_cb)
-        self.screen.add_events( gtk.gdk.BUTTON_PRESS_MASK )
+        self.screen.add_events( Gdk.EventMask.BUTTON_PRESS_MASK )
         self.marker1=100
         self.marker2=200
         self.marker3=300
@@ -234,18 +233,18 @@ class gtkSpec:
 
         # Construct gstreamer pipeline to funnel data into the application
         # pulsesrc ! audioconvert ! fakesink ! (this program)
-        self.pipeline=gst.Pipeline("mypipeline")
+        self.pipeline=Gst.Pipeline.new("mypipeline")
 
-        src=gst.element_factory_make("pulsesrc", "src")
+        src=Gst.ElementFactory.make("pulsesrc", "src")
         self.pipeline.add(src)
 
-        ac=gst.element_factory_make("audioconvert","ac")
+        ac=Gst.ElementFactory.make("audioconvert","ac")
         self.pipeline.add(ac)
 
-        sink=gst.element_factory_make("fakesink","fakesink")
+        sink=Gst.ElementFactory.make("fakesink","fakesink")
         self.pipeline.add(sink)
 
-        src.link(ac,gst.caps_from_string("audio/x-raw-int,width=16,signed=true,rate="+ str(self.sampleRate) + ",channels=1"))
+        src.link(ac)#,Gst.caps_from_string("audio/x-raw-int,width=16,signed=true,rate="+ str(self.sampleRate) + ",channels=1"))
         ac.link(sink)
         src.set_property("blocksize",self.blockSize)
         
@@ -253,42 +252,42 @@ class gtkSpec:
         sink.connect("handoff",self.buffer_cb)
 
         # Organization on window...
-        hbox=gtk.HBox(True,0)
+        hbox=Gtk.HBox(True,0)
         hbox.pack_start(self.screen,False,True,0)
         
-        vbox=gtk.VBox(True,10)
+        vbox=Gtk.VBox(True,10)
         hbox.pack_end(vbox,True,True,0)
 
         # Radio buttons for markers and status readout
-        self.button1=gtk.RadioButton(None,"Marker 1")
+        self.button1=Gtk.RadioButton(None,"Marker 1")
         self.button1.set_active(True)
         vbox.pack_start(self.button1,True,True,0)
 
-        self.marker1_freq=gtk.Label(str(convert_to_hz(self.marker1,self.sampleRate,self.blockSize)) + " Hz")
+        self.marker1_freq=Gtk.Label(str(convert_to_hz(self.marker1,self.sampleRate,self.blockSize)) + " Hz")
         vbox.pack_start(self.marker1_freq,True,True,0)
 
-        self.marker1_mag=gtk.Label('0 dB')
+        self.marker1_mag=Gtk.Label('0 dB')
         vbox.pack_start(self.marker1_mag,True,True,0)
 
-        self.button2=gtk.RadioButton(self.button1,"Marker 2")
+        self.button2=Gtk.RadioButton(self.button1,"Marker 2")
         vbox.pack_start(self.button2,True,True,0)
 
-        self.marker2_freq=gtk.Label(str(convert_to_hz(self.marker2,self.sampleRate,self.blockSize)) + " Hz")
+        self.marker2_freq=Gtk.Label(str(convert_to_hz(self.marker2,self.sampleRate,self.blockSize)) + " Hz")
         vbox.pack_start(self.marker2_freq,True,True,0)
 
-        self.marker2_mag=gtk.Label('0 dB')
+        self.marker2_mag=Gtk.Label('0 dB')
         vbox.pack_start(self.marker2_mag,True,True,0)
 
-        self.button3=gtk.RadioButton(self.button1,"Marker 3")
+        self.button3=Gtk.RadioButton(self.button1,"Marker 3")
         vbox.pack_start(self.button3,True,True,0)
 
-        self.marker3_freq=gtk.Label(str(convert_to_hz(self.marker3,self.sampleRate,self.blockSize)) + " Hz")
+        self.marker3_freq=Gtk.Label(str(convert_to_hz(self.marker3,self.sampleRate,self.blockSize)) + " Hz")
         vbox.pack_start(self.marker3_freq,True,True,0)
 
-        self.marker3_mag=gtk.Label('0 dB')
+        self.marker3_mag=Gtk.Label('0 dB')
         vbox.pack_start(self.marker3_mag,True,True,0)
 
-        self.modeSelect=gtk.combo_box_new_text()
+        self.modeSelect=Gtk.ComboBoxText()
         self.modeSelect.append_text('Spectrum')
         self.modeSelect.append_text('XY track')
         self.modeSelect.append_text('Autocorrelation')
@@ -300,7 +299,7 @@ class gtkSpec:
         self.window.add(hbox)
         self.window.show_all()
 
-        self.pixmap = gtk.gdk.Pixmap(self.screen.window, 512, 380)
+        self.pixmap = Gdk.Pixmap(self.screen.window, 512, 380)
         self.pixmap.draw_rectangle(self.screen.get_style().black_gc,True,0,0,512,380)
 
         self.black=self.screen.window.get_colormap().alloc_color(0,0,0)
@@ -309,17 +308,17 @@ class gtkSpec:
         self.green=self.screen.window.get_colormap().alloc_color(0,0xFFFF,0)
         self.blue=self.screen.window.get_colormap().alloc_color(0,0,0xFFFF)
 
-        self.pipeline.set_state(gst.STATE_PLAYING)
+        self.pipeline.set_state(Gst.State.PLAYING)
 
         self.data=numpy.zeros(self.dataBlock.shape)
-        gobject.idle_add(self.update_display,self)
+        GObject.idle_add(self.update_display,self)
         return
 
     def main(self):
-        gtk.main()
+        Gtk.main()
         return 0
 
 if __name__ == "__main__":
-    gtk.gdk.threads_init()
+    Gst.init(None)
     gtkspec=gtkSpec()
     gtkspec.main()
