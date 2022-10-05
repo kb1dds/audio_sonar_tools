@@ -27,7 +27,7 @@ import cairo
 import gi
 gi.require_version("Gtk","3.0")
 gi.require_version("Gst","1.0")
-from gi.repository import GObject, Gtk, Gdk, Gst
+from gi.repository import GObject, Gtk, Gdk, Gst, GLib
 
 import time
 import struct
@@ -65,44 +65,76 @@ class gtkSpec:
         self.pipeline.set_state(Gst.State.NULL)
         Gtk.main_quit()
 
-    def buffer_cb(self, buffer, pad, user_data):
-        Gdk.threads_enter()
-
+    def buffer_cb(self, sink):#, pad, user_data):
         # Unpack and FFT data
-        self.data=numpy.array([x*190.0/2.0**16 for x in unpack(pad)])
-        Gdk.threads_leave()
+        #self.data=numpy.array([x*190.0/2.0**16 for x in unpack(pad)])
+        #print('new sample coming')
+        sample=sink.emit('pull-sample')
+        #print('Requested sample')
+        buffer=sample.get_buffer()
+        #print("got {}".format(buffer.get_size()))
+        
+        self.data=numpy.frombuffer(buffer.extract_dup(0,buffer.get_size()),
+                                   dtype=numpy.int16)
+        #print("incoming: {}".format(self.data.shape))
+        #print("current: {}".format(self.dataBlock.shape))
 
+        return Gst.FlowReturn.OK
+
+    def trigger_update(self):
+        #print(self.pipeline.get_by_name('as').get_state(1))
+        rect=self.screen.get_allocation()
+        self.window.get_window().invalidate_rect(rect,True)
         return True
         
-    def update_display(self,event):
-        if self.updating:
-            return False
-
-        self.updating=True
-        Gdk.threads_enter()
+    def update_display(self,widget,ctx):
         
-        self.dataBlock=numpy.concatenate((self.dataBlock[self.blockSize/2:],self.data))
+        self.dataBlock=numpy.concatenate((self.dataBlock[int(self.blockSize/2):],self.data))
         data_fft=fft(self.dataBlock)
 
-        # Color state
-        style=self.screen.get_style()
-        gc=style.fg_gc[Gtk.State.NORMAL]
-        gc_oldfg = gc.foreground
+        if(self.rt < 10):
+            self.rt=self.rt + 1
+            return True
 
         # Erase current display
-        gc.foreground=self.black
-        self.pixmap.draw_rectangle(gc,True,0,0,512,380)
+        #gc.foreground=self.black
+        #self.pixmap.draw_rectangle(gc,True,0,0,512,380)
+#        if( self.mode == 3 ):
+#            ctx.set_source_rgb(1,1,1)
+#        else:
+        ctx.set_source_rgb(0,0,0)
+        ctx.rectangle(0,0,512,380)
+        ctx.fill()
+#        return True
         if( self.mode == 2 ):
             # Draw markers
-            gc.foreground=self.red
-            self.pixmap.draw_line(gc,self.marker1,0,self.marker1,380)
-            gc.foreground=self.green
-            self.pixmap.draw_line(gc,self.marker2,0,self.marker2,380)
-            gc.foreground=self.blue
-            self.pixmap.draw_line(gc,self.marker3,0,self.marker3,380)
+            #gc.foreground=self.red
+            #self.pixmap.draw_line(gc,self.marker1,0,self.marker1,380)
+            ctx.set_source_rgb(1,0,0)
+            ctx.new_path()
+            ctx.move_to(self.marker1,0)
+            ctx.line_to(self.marker1,380)
+            ctx.stroke()
+
+            #gc.foreground=self.green
+            #self.pixmap.draw_line(gc,self.marker2,0,self.marker2,380)
+            ctx.set_source_rgb(0,1,0)
+            ctx.new_path()
+            ctx.move_to(self.marker2,0)
+            ctx.line_to(self.marker2,380)
+            ctx.stroke()
+            
+            #gc.foreground=self.blue
+            #self.pixmap.draw_line(gc,self.marker3,0,self.marker3,380)
+            ctx.set_source_rgb(0,0,1)
+            ctx.new_path()
+            ctx.move_to(self.marker3,0)
+            ctx.line_to(self.marker3,380)
+            ctx.stroke()
 
             # Draw autocorrelation
-            gc.foreground=self.white
+            #gc.foreground=self.white
+            ctx.set_source_rgb(1,1,1)
 
             data=20*numpy.log10(0.01+abs(ifft(data_fft*conj(data_fft))))
             data[data<-20]=-20
@@ -114,7 +146,13 @@ class gtkSpec:
             self.marker2_mag.set_text(str(data[int(self.marker2)])+' dB')
             self.marker3_mag.set_text(str(data[int(self.marker3)])+' dB')
 
-            self.pixmap.draw_lines(gc,[(i,int(380-e)) for i,e in enumerate(data)])
+            #self.pixmap.draw_lines(gc,[(i,int(380-e)) for i,e in enumerate(data)])
+            ctx.new_path()
+            ctx.move_to(0,int(380-data[0]))
+            for i,e in enumerate(data):
+                ctx.line_to(i,int(380-e))
+            
+            ctx.stroke()
         if( self.mode == 0 or self.mode == 1 or self.mode == 3): # Frequency domain preproc
             data=20*numpy.log10(0.01+abs(data_fft))
 
@@ -131,24 +169,58 @@ class gtkSpec:
         if( self.mode == 3 ):
             self.spectrogram[1:379,:]=self.spectrogram[0:378,:]
             self.spectrogram[0,:]=data*2
-            self.pixmap.draw_gray_image(gc,0,0,511,380,Gdk.RGB_DITHER_NONE,self.spectrogram.astype('uint8'),511)
+            #            self.pixmap.draw_gray_image(gc,0,0,511,380,Gdk.RGB_DITHER_NONE,self.spectrogram.astype('uint8'),511)
+            #surface = cairo.ImageSurface.create_for_data(self.spectrogram.astype('uint8'),cairo.FORMAT_A8,self.spectrogram.shape[1],self.spectrogram.shape[0])
+            dat = numpy.array(self.spectrogram, dtype=numpy.uint8)
+            dat.shape=(dat.shape[0],dat.shape[1],1)
+            dat = numpy.concatenate((dat,dat,dat,numpy.zeros_like(dat)),axis=2)
+            surface = cairo.ImageSurface.create_for_data(dat,cairo.FORMAT_ARGB32,dat.shape[1],dat.shape[0])
+            ctx.set_source_surface(surface,0,0)
+            ctx.paint()
+
         else:
             self.spectrogram=numpy.zeros((380,511))
 
         if( self.mode == 0 or self.mode == 3 ):
             # Draw markers
-            gc.foreground=self.red
-            self.pixmap.draw_line(gc,self.marker1,0,self.marker1,380)
-            gc.foreground=self.green
-            self.pixmap.draw_line(gc,self.marker2,0,self.marker2,380)
-            gc.foreground=self.blue
-            self.pixmap.draw_line(gc,self.marker3,0,self.marker3,380)
-            gc.foreground=self.white
+            
+            #gc.foreground=self.red
+            #self.pixmap.draw_line(gc,self.marker1,0,self.marker1,380)
+            ctx.set_source_rgb(1,0,0)
+            ctx.new_path()
+            ctx.move_to(self.marker1,0)
+            ctx.line_to(self.marker1,380)
+            ctx.stroke()
+
+            #gc.foreground=self.green
+            #self.pixmap.draw_line(gc,self.marker2,0,self.marker2,380)
+            ctx.set_source_rgb(0,1,0)
+            ctx.new_path()
+            ctx.move_to(self.marker2,0)
+            ctx.line_to(self.marker2,380)
+            ctx.stroke()
+            
+            #gc.foreground=self.blue
+            #self.pixmap.draw_line(gc,self.marker3,0,self.marker3,380)
+            ctx.set_source_rgb(0,0,1)
+            ctx.new_path()
+            ctx.move_to(self.marker3,0)
+            ctx.line_to(self.marker3,380)
+            ctx.stroke()
+
 
         if( self.mode == 0 ):
             # Draw spectrum
-            gc.foreground=self.white
-            self.pixmap.draw_lines(gc,[(i,int(380-e)) for i,e in enumerate(data)])
+            #gc.foreground=self.white
+            #self.pixmap.draw_lines(gc,[(i,int(380-e)) for i,e in enumerate(data)])
+            ctx.set_source_rgb(1,1,1)
+            ctx.new_path()
+            ctx.move_to(0,int(380-data[0]))
+            for i,e in enumerate(data):
+                ctx.line_to(i,int(380-e))
+            
+            ctx.stroke()
+
         if( self.mode == 1 ):
             # Plot points on a track
             marker1val=int(max(abs(data_fft[self.marker1-5:self.marker1+5])))
@@ -156,21 +228,34 @@ class gtkSpec:
             newpt=(marker1val,marker2val)
             self.track.append(newpt)
             scale=scale_track(self.track,512,380)
-            gc.foreground=self.white
-            self.pixmap.draw_points(gc,[(int(x[0]*scale),int(x[1]*scale)) for x in self.track])
-            gc.foreground=self.green
-            self.pixmap.draw_segments(gc,[(int(scale*newpt[0])-5,int(scale*newpt[1]),int(scale*newpt[0])+5,int(scale*newpt[1])),
-                                          (int(scale*newpt[0]),int(scale*newpt[1])-5,int(scale*newpt[0]),int(scale*newpt[1])+5)])
+            #gc.foreground=self.white
+            #self.pixmap.draw_points(gc,[(int(x[0]*scale),int(x[1]*scale)) for x in self.track])
+            ctx.set_source_rgb(1,1,1)
+            for x in self.track:
+                ctx.move_to(int(x[0]*scale),int(x[1]*scale))
+                ctx.close_path()
+                ctx.stroke()
+            
+            #gc.foreground=self.green
+            #self.pixmap.draw_segments(gc,[(,int(scale*newpt[0])+5,int(scale*newpt[1])),
+            #                              (int(scale*newpt[0]),int(scale*newpt[1])-5,int(scale*newpt[0]),int(scale*newpt[1])+5)])
+            ctx.set_source_rgb(0,1,0)
+            ctx.new_path()
+            ctx.move_to(int(scale*newpt[0])-5,int(scale*newpt[1]))
+            ctx.line_to(int(scale*newpt[0])+5,int(scale*newpt[1]))
+            ctx.stroke()
+            ctx.new_path()
+            ctx.move_to(int(scale*newpt[0]),int(scale*newpt[1])-5)
+            ctx.line_to(int(scale*newpt[0]),int(scale*newpt[1])+5)
+            ctx.stroke()
 
-        # Restore default color
-        gc.foreground=gc_oldfg
+#        # Restore default color
+#        gc.foreground=gc_oldfg
 
         # Update the window
-        self.screen.window.draw_drawable(self.screen.get_style().fg_gc[Gtk.State.NORMAL],
-                                         self.pixmap, 0, 0, 0, 0, 512, 380)
+#        self.screen.window.draw_drawable(self.screen.get_style().fg_gc[Gtk.State.NORMAL],
+#                                         self.pixmap, 0, 0, 0, 0, 512, 380)
 
-        self.updating=False
-        Gdk.threads_leave()
         return True
 
     def swapmode(self,event):
@@ -200,12 +285,13 @@ class gtkSpec:
             self.marker1_freq.set_text(str(convert_to_hz(self.marker1,self.sampleRate,self.blockSize)) + " Hz")
             self.marker2_freq.set_text(str(convert_to_hz(self.marker2,self.sampleRate,self.blockSize)) + " Hz")
             self.marker3_freq.set_text(str(convert_to_hz(self.marker3,self.sampleRate,self.blockSize)) + " Hz")
+
         return True
 
     def __init__(self):
         self.window = Gtk.Window()
 
-        self.updating = False
+        self.rt=0
 
         # Transform parameters
         self.blockSize=2048
@@ -225,6 +311,8 @@ class gtkSpec:
         self.screen.set_size_request(512,380)
         self.screen.connect("button_press_event",self.button_cb)
         self.screen.add_events( Gdk.EventMask.BUTTON_PRESS_MASK )
+        self.screen.connect("draw",self.update_display)
+
         self.marker1=100
         self.marker2=200
         self.marker3=300
@@ -232,24 +320,34 @@ class gtkSpec:
         self.track=[]
 
         # Construct gstreamer pipeline to funnel data into the application
-        # pulsesrc ! audioconvert ! fakesink ! (this program)
+        # pulsesrc ! capsfilter ! appsink ! (this program)
         self.pipeline=Gst.Pipeline.new("mypipeline")
 
         src=Gst.ElementFactory.make("pulsesrc", "src")
+        src.set_property("blocksize",self.blockSize)
         self.pipeline.add(src)
 
-        ac=Gst.ElementFactory.make("audioconvert","ac")
+#        ac=Gst.ElementFactory.make("audioconvert","ac")
+#        #ac.set_property("caps",Gst.caps_from_string("audio/x-raw-int,width=16,signed=true,rate="+ str(self.sampleRate) + ",channels=1"))
+#        self.pipeline.add(ac)
+
+        ac=Gst.ElementFactory.make("capsfilter","ac")
+        ac.set_property("caps",Gst.caps_from_string("audio/x-raw,format=S16LE,rate="+ str(self.sampleRate) + ",channels=1"))
         self.pipeline.add(ac)
 
-        sink=Gst.ElementFactory.make("fakesink","fakesink")
+        sink=Gst.ElementFactory.make("appsink","as")
+        sink.set_property('max-buffers',20)
+        sink.set_property("emit-signals",True)
+        sink.set_property("sync",False)
+        sink.connect("new-sample",self.buffer_cb)
         self.pipeline.add(sink)
 
-        src.link(ac)#,Gst.caps_from_string("audio/x-raw-int,width=16,signed=true,rate="+ str(self.sampleRate) + ",channels=1"))
+        src.link(ac)
         ac.link(sink)
-        src.set_property("blocksize",self.blockSize)
         
-        sink.set_property("signal-handoffs",True)
-        sink.connect("handoff",self.buffer_cb)
+        
+        #sink.set_property("signal-handoffs",True)
+
 
         # Organization on window...
         hbox=Gtk.HBox(True,0)
@@ -259,7 +357,7 @@ class gtkSpec:
         hbox.pack_end(vbox,True,True,0)
 
         # Radio buttons for markers and status readout
-        self.button1=Gtk.RadioButton(None,"Marker 1")
+        self.button1=Gtk.RadioButton(None,label="Marker 1")
         self.button1.set_active(True)
         vbox.pack_start(self.button1,True,True,0)
 
@@ -269,7 +367,8 @@ class gtkSpec:
         self.marker1_mag=Gtk.Label('0 dB')
         vbox.pack_start(self.marker1_mag,True,True,0)
 
-        self.button2=Gtk.RadioButton(self.button1,"Marker 2")
+        self.button2=Gtk.RadioButton(group=self.button1,label="Marker 2")
+        self.button2.set_active(False)
         vbox.pack_start(self.button2,True,True,0)
 
         self.marker2_freq=Gtk.Label(str(convert_to_hz(self.marker2,self.sampleRate,self.blockSize)) + " Hz")
@@ -278,7 +377,8 @@ class gtkSpec:
         self.marker2_mag=Gtk.Label('0 dB')
         vbox.pack_start(self.marker2_mag,True,True,0)
 
-        self.button3=Gtk.RadioButton(self.button1,"Marker 3")
+        self.button3=Gtk.RadioButton(group=self.button1,label="Marker 3")
+        self.button3.set_active(False)
         vbox.pack_start(self.button3,True,True,0)
 
         self.marker3_freq=Gtk.Label(str(convert_to_hz(self.marker3,self.sampleRate,self.blockSize)) + " Hz")
@@ -299,19 +399,18 @@ class gtkSpec:
         self.window.add(hbox)
         self.window.show_all()
 
-        self.pixmap = Gdk.Pixmap(self.screen.window, 512, 380)
-        self.pixmap.draw_rectangle(self.screen.get_style().black_gc,True,0,0,512,380)
+        #self.black=self.screen.window.get_colormap().alloc_color(0,0,0)
+        #self.white=self.screen.window.get_colormap().alloc_color(0xFFFF,0xFFFF,0xFFFF)
+        #self.red=self.screen.window.get_colormap().alloc_color(0xFFFF,0,0)
+        #self.green=self.screen.window.get_colormap().alloc_color(0,0xFFFF,0)
+        #self.blue=self.screen.window.get_colormap().alloc_color(0,0,0xFFFF)
 
-        self.black=self.screen.window.get_colormap().alloc_color(0,0,0)
-        self.white=self.screen.window.get_colormap().alloc_color(0xFFFF,0xFFFF,0xFFFF)
-        self.red=self.screen.window.get_colormap().alloc_color(0xFFFF,0,0)
-        self.green=self.screen.window.get_colormap().alloc_color(0,0xFFFF,0)
-        self.blue=self.screen.window.get_colormap().alloc_color(0,0,0xFFFF)
-
-        self.pipeline.set_state(Gst.State.PLAYING)
+        if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            print('Error! Did not start pipeline')
 
         self.data=numpy.zeros(self.dataBlock.shape)
-        GObject.idle_add(self.update_display,self)
+        #GLib.idle_add(self.update_display,self)
+        GLib.timeout_add(50,self.trigger_update)
         return
 
     def main(self):
