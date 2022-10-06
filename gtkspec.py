@@ -58,7 +58,7 @@ class gtkSpec:
         self.pipeline.set_state(Gst.State.NULL)
         Gtk.main_quit()
 
-    def buffer_cb(self, sink):#, pad, user_data):
+    def buffer_cb(self, sink):
         # Unpack and FFT data
         sample=sink.emit('pull-sample')
         buffer=sample.get_buffer()
