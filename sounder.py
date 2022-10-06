@@ -254,7 +254,6 @@ class sounder:
         self.screenHeight=380
         self.screen.set_size_request(self.screenWidth,self.screenHeight)
         self.zoom=1
-        self.screen.add_events( Gdk.EventMask.BUTTON_PRESS_MASK )
         self.screen.connect("draw",self.update_display)
 
         # Load chirp reference
@@ -325,10 +324,10 @@ class sounder:
         vbox.pack_start(self.centercheck,True,True,0)
 
         hbox2=Gtk.HBox(homogeneous=True,spacing=0)
-        button=Gtk.Button(label='+')
+        button=Gtk.Button(label='AVG+')
         button.connect('clicked',self.avg_up)
         hbox2.pack_start(button,True,True,0)
-        button=Gtk.Button(label='-')
+        button=Gtk.Button(label='AVG-')
         button.connect('clicked',self.avg_dn)
         hbox2.pack_start(button,True,True,0)
         vbox.pack_end(hbox2,True,True,0)
@@ -348,8 +347,6 @@ class sounder:
 
         # Wait to start transmitting until the pipeline is fully assembled
         self.txpipeline.set_state(Gst.State.PAUSED)  
-
-        self.data=numpy.zeros(self.dataBlock.shape)
 
         self.data=numpy.zeros(self.dataBlock.shape)
         GLib.timeout_add(50,self.trigger_update)
