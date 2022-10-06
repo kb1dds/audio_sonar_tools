@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 # 
 # Interative matched filter bank
 #  Uses reference signals from WAV files, or as captured from the environment
@@ -26,13 +26,12 @@
 #
 # Version 0.1
 
-import gtk
+import cairo
+import gi
+gi.require_version("Gtk","3.0")
+gi.require_version("Gst","1.0")
+from gi.repository import GObject, Gtk, Gdk, Gst, GLib
 
-import gobject
-import pygst
-pygst.require("0.10")
-import pango
-import gst
 import time
 import struct
 import wave
@@ -41,7 +40,7 @@ from math import sqrt
 from numpy import conj
 from numpy.fft import fft, ifft
 
-# Unpack data from gstreamer
+# Unpack data 
 def unpack(str,bytesPerSample=2):
     result=list()
     for i in range(0,len(str)-1,bytesPerSample):
@@ -67,37 +66,33 @@ class matFilter:
         return False
 
     def destroy_event(self, data=None):
-        self.pipeline.set_state(gst.STATE_NULL)
-        gtk.main_quit()
+        self.pipeline.set_state(Gst.State.NULL)
+        Gtk.main_quit()
 
-    def buffer_cb(self, buffer, pad, user_data):
-        gtk.gdk.threads_enter()
-
+    def buffer_cb(self, sink):
         # Unpack and FFT data
-        self.data=numpy.array([x*190.0/2.0**16 for x in unpack(pad)])
-        gtk.gdk.threads_leave()
+        sample=sink.emit('pull-sample')
+        buffer=sample.get_buffer()
+        self.data=numpy.frombuffer(buffer.extract_dup(0,buffer.get_size()),
+                                   dtype=numpy.int16)
 
+        return Gst.FlowReturn.OK
+
+    def trigger_update(self):
+        rect=self.screen.get_allocation()
+        self.window.get_window().invalidate_rect(rect,True)
         return True
         
-    def update_display(self,event):
-        if self.updating:
-            return True
+    def update_display(self,widget,ctx):
 
-        self.updating=True
-        gtk.gdk.threads_enter()
-        
         # Update the data area
-        self.dataBlock=numpy.concatenate((self.dataBlock[self.blockSize/2:],self.data))
+        self.dataBlock=numpy.concatenate((self.dataBlock[int(self.blockSize/2):],self.data))
         data_fft=fft(self.dataBlock)        
 
-        # Color state
-        style=self.screen.get_style()
-        gc=style.fg_gc[gtk.STATE_NORMAL]
-        gc_oldfg = gc.foreground
-
         # Erase current display
-        gc.foreground=self.black
-        self.pixmap.draw_rectangle(gc,True,0,0,512,380)
+        ctx.set_source_rgb(0,0,0)
+        ctx.rectangle(0,0,512,380)
+        ctx.fill()
 
         # Manage storing of data if storage is queued
         if self.storing:
@@ -132,13 +127,13 @@ class matFilter:
             # Plot
             if( i>=0 and i <=3 ):
                 if i==0:
-                    gc.foreground=self.white
+                    ctx.set_source_rgb(1,1,1)
                 elif i==1:
-                    gc.foreground=self.red
+                    ctx.set_source_rgb(1,0,0)
                 elif i==2:
-                    gc.foreground=self.green
+                    ctx.set_source_rgb(0,1,0)
                 elif i==3:
-                    gc.foreground=self.blue
+                    ctx.set_source_rgb(0,0,1)
 
                 if self.centercheck.get_active():
                     idx=numpy.argmax(abs(corr))
@@ -150,16 +145,26 @@ class matFilter:
                 else:
                     self.corr_data[i]=corr[idx:]
 
-                plotdat=self.corr_data[i][::self.blockSize/2*self.blocks/512]
+                plotdat=self.corr_data[i][::int(self.blockSize/2*self.blocks/512)]
 
                 data=20*numpy.log10(0.01+abs(self.corr_data[i]))
                 data[data<-20]=-20
                 data=data+20
-                self.pixmap.draw_lines(gc,[(i2,int(380-e)) for i2,e in enumerate(data)])
 
-            gc.foreground=self.white
-            self.pixmap.draw_arc(gc,True,xm-2,ym-2,4,4,0,360*64)
-            self.pixmap.draw_line(gc,xm,ym,xm,370)
+                ctx.new_path()
+                ctx.move_to(0,int(380-data[0]))
+                for i2,e in enumerate(data):
+                    ctx.line_to(i2,int(380-e))
+                ctx.stroke()
+
+            ctx.set_source_rgb(1,1,1)
+            ctx.new_path()
+            ctx.arc(xm,ym,4,0,6.28319)
+            ctx.stroke()
+            ctx.new_path()
+            ctx.move_to(xm,ym)
+            ctx.line_to(xm,370)
+            ctx.stroke()
 
         if maxnum >= 0:
             self.detectedText.set_text('Detected filter:' + str(maxnum+1))
@@ -170,27 +175,25 @@ class matFilter:
         for i in range(1,10):
             y=i*50
             rangeMarker=self.blockSize*340/self.sampleRate*self.blocks*100*y/1024;
-            layout=self.screen.create_pango_layout(str(rangeMarker) + ' cm')
-            gc.foreground=self.white
-            self.pixmap.draw_layout(gc,y,i*20,layout)
-            gc.foreground=self.green
-            self.pixmap.draw_line(gc,y,0,y,380)
+
+            ctx.set_source_rgb(1,1,1)
+            ctx.move_to(y,i*20)
+            ctx.set_font_size(12)
+            ctx.select_font_face('Arial', cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            ctx.show_text('%0.0f' % rangeMarker + ' cm')
+
+            ctx.set_source_rgb(0,1,0)
+            ctx.new_path()
+            ctx.move_to(y,0)
+            ctx.line_to(y,380)
+            ctx.stroke()
 
         # Finalize stored data
         if self.storing:
             self.savedData=numpy.append(self.savedData,newData,0)
             self.storeButton.set_label('Store #' + str(numpy.size(self.savedData,0)+1))
             self.storing=False
-
-        # Restore default color
-        gc.foreground=gc_oldfg
-
-        # Update the window
-        self.screen.window.draw_drawable(self.screen.get_style().fg_gc[gtk.STATE_NORMAL],
-                                         self.pixmap, 0, 0, 0, 0, 512, 380)
-
-        self.updating=False
-        gtk.gdk.threads_leave()
+            
         return True
 
     def entry_update(self,event,data): # data contains the index of the entry box that changed
@@ -203,7 +206,7 @@ class matFilter:
 
         # Unpack file into a numpy array
         wavdata=unpack(f.readframes(f.getnframes()),f.getsampwidth())
-        self.ref[data]=numpy.conjugate(fft(wavdata,self.blockSize/2*self.blocks))
+        self.ref[data]=numpy.conjugate(fft(wavdata,int(self.blockSize/2*self.blocks)))
 
         return True
 
@@ -218,12 +221,14 @@ class matFilter:
 
     def save_cb(self,event): # Save the data to file
         # Get file to store
-        dialog=gtk.FileChooserDialog('Save as...',self.window,
-                                     gtk.FILE_CHOOSER_ACTION_SAVE, 
-                                     (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
-                                      gtk.STOCK_SAVE, gtk.RESPONSE_OK))
+        dialog=Gtk.FileChooserDialog(title='Save as...',
+                                     parent=self.window,
+                                     action=Gtk.FileChooserAction.SAVE)
+        dialog.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        dialog.add_button(Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
+        
         response=dialog.run()
-        if response==gtk.RESPONSE_OK:
+        if response==Gtk.ResponseType.OK:
             # Save the data
             numpy.savetxt(dialog.get_filename(),self.savedData,fmt='%2.4f')
             
@@ -244,28 +249,26 @@ class matFilter:
     def average_cb(self,event):
         self.corr_data=[]
         for i in range(0,self.filters):
-            self.corr_data.append(numpy.zeros((self.blockSize/2*self.blocks)))
+            self.corr_data.append(numpy.zeros(int(self.blockSize/2*self.blocks),dtype='complex128'))
         return True
 
     def __init__(self):
-        self.window = gtk.Window()
-
-        self.updating = False
+        self.window = Gtk.Window()
 
         # Transform parameters
         self.blockSize=32768
         self.blocks=1
         self.sampleRate=44100
-        self.dataBlock=numpy.zeros((self.blocks*self.blockSize/2))
+        self.dataBlock=numpy.zeros(int(self.blocks*self.blockSize/2))
         self.filters=8
         self.corr_data=[]
         for i in range(0,self.filters):
-            self.corr_data.append(numpy.zeros((self.blockSize/2*self.blocks)))
+            self.corr_data.append(numpy.zeros(int(self.blockSize/2*self.blocks)))
 
         # Default reference signals
         self.ref=[]
         for i in range(0,self.filters):
-            self.ref.append(numpy.zeros((self.blockSize/2*self.blocks)))
+            self.ref.append(numpy.zeros(int(self.blockSize/2*self.blocks)))
 
         # Window boilerplate
         self.window.set_title("Matched filter bank")
@@ -274,57 +277,60 @@ class matFilter:
         self.window.set_border_width(5)
 
         # Display area boilerplate
-        self.screen=gtk.DrawingArea()
+        self.screen=Gtk.DrawingArea()
+        self.screen.connect("draw",self.update_display)
 
         # Construct gstreamer pipeline to funnel data into the application
-        # pulsesrc ! audioconvert ! fakesink ! (this program)
-        self.pipeline=gst.Pipeline("mypipeline")
+        # pulsesrc ! capsfilter ! appsink ! (this program)
+        self.pipeline=Gst.Pipeline.new("mypipeline")
 
-        src=gst.element_factory_make("pulsesrc", "src")
+        src=Gst.ElementFactory.make("pulsesrc", "src")
+        src.set_property("blocksize",self.blockSize)
         self.pipeline.add(src)
 
-        ac=gst.element_factory_make("audioconvert","ac")
+        ac=Gst.ElementFactory.make("capsfilter","ac")
+        ac.set_property("caps",Gst.caps_from_string("audio/x-raw,format=S16LE,rate="+ str(self.sampleRate) + ",channels=1"))
         self.pipeline.add(ac)
 
-        sink=gst.element_factory_make("fakesink","fakesink")
+        sink=Gst.ElementFactory.make("appsink","as")
+        sink.set_property('max-buffers',20)
+        sink.set_property("emit-signals",True)
+        sink.set_property("sync",False)
+        sink.connect("new-sample",self.buffer_cb)
         self.pipeline.add(sink)
 
-        src.link(ac,gst.caps_from_string("audio/x-raw-int,width=16,signed=true,rate="+ str(self.sampleRate) + ",channels=1"))
+        src.link(ac)
         ac.link(sink)
-        src.set_property("blocksize",self.blockSize)
-        
-        sink.set_property("signal-handoffs",True)
-        sink.connect("handoff",self.buffer_cb)
 
         # Organization on window...
-        hbox=gtk.HBox(True,0)
+        hbox=Gtk.HBox(homogeneous=True,spacing=0)
         hbox.pack_start(self.screen,False,True,0)
         
-        vbox=gtk.VBox(True,10)
+        vbox=Gtk.VBox(homogeneous=True,spacing=10)
         hbox.pack_end(vbox,True,True,0)
 
-        hbox2=gtk.HBox(True,0)
-        self.averagecheck=gtk.CheckButton('Averaging');
+        hbox2=Gtk.HBox(homogeneous=True,spacing=0)
+        self.averagecheck=Gtk.CheckButton(label='Averaging');
         self.averagecheck.connect('toggled',self.average_cb)
         hbox2.pack_start(self.averagecheck,True,True,0)
-        self.centercheck=gtk.CheckButton('Center');
+        self.centercheck=Gtk.CheckButton(label='Center');
         hbox2.pack_start(self.centercheck,True,True,0)
-        self.sinrcheck=gtk.CheckButton('SINR');
+        self.sinrcheck=Gtk.CheckButton(label='SINR');
         hbox2.pack_start(self.sinrcheck,True,True,0)
         vbox.pack_start(hbox2,True,True,0)
         
-        self.detectedText=gtk.Label('Detected filter: None')
+        self.detectedText=Gtk.Label(label='Detected filter: None')
         vbox.pack_start(self.detectedText,True,True,0)
 
         # Datafile controls
-        hbox2=gtk.HBox(True,0)
-        self.storeButton=gtk.Button('Store #1')
+        hbox2=Gtk.HBox(homogeneous=True,spacing=0)
+        self.storeButton=Gtk.Button(label='Store #1')
         self.storeButton.connect('clicked',self.store_cb)
         hbox2.pack_start(self.storeButton,True,True,0)
-        clearButton=gtk.Button('Delete Last')
+        clearButton=Gtk.Button(label='Delete Last')
         clearButton.connect('clicked',self.delete_cb)
         hbox2.pack_start(clearButton,True,True,0)
-        saveButton=gtk.Button('Save')
+        saveButton=Gtk.Button(label='Save')
         saveButton.connect('clicked',self.save_cb)
         hbox2.pack_start(saveButton,True,True,0)
         vbox.pack_start(hbox2,True,True,0)
@@ -334,12 +340,12 @@ class matFilter:
         # Matched filter reference files
         self.entry=[]
         for i in range(0,self.filters):
-            hbox2=gtk.HBox(True,0)
-            capture=gtk.Button('Capture ' + str(i+1))
+            hbox2=Gtk.HBox(homogeneous=True,spacing=0)
+            capture=Gtk.Button(label='Capture ' + str(i+1))
             capture.connect('clicked',self.capture_cb,i)
             hbox2.pack_start(capture,True,True,0)
 
-            self.entry.append(gtk.Entry())
+            self.entry.append(Gtk.Entry())
             self.entry[i].connect('activate',self.entry_update,i)
             hbox2.pack_start(self.entry[i],True,True,0)
 
@@ -349,28 +355,19 @@ class matFilter:
         self.window.add(hbox)
         self.window.show_all()
 
-        # Reference color data
-        self.pixmap = gtk.gdk.Pixmap(self.screen.window, 512, 380)
-        self.pixmap.draw_rectangle(self.screen.get_style().black_gc,True,0,0,512,380)
-
-        self.black=self.screen.window.get_colormap().alloc_color(0,0,0)
-        self.white=self.screen.window.get_colormap().alloc_color(0xFFFF,0xFFFF,0xFFFF)
-        self.red=self.screen.window.get_colormap().alloc_color(0xFFFF,0,0)
-        self.green=self.screen.window.get_colormap().alloc_color(0,0xFFFF,0)
-        self.blue=self.screen.window.get_colormap().alloc_color(0,0,0xFFFF)
-
-        self.pipeline.set_state(gst.STATE_PLAYING)
+        if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            print('Error! Did not start pipeline')
 
         self.data=numpy.zeros(self.dataBlock.shape)
-        gobject.idle_add(self.update_display,self)
+        GLib.timeout_add(50,self.trigger_update)
         
         return
 
     def main(self):
-        gtk.main()
+        Gtk.main()
         return 0
 
 if __name__ == "__main__":
-    gtk.gdk.threads_init()
+    Gst.init()
     matfilter=matFilter()
     matfilter.main()
