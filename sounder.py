@@ -101,6 +101,11 @@ class sounder:
         data[data>500]=500
         data=data+20
 
+        self.data_snapshot = data
+
+        if self.cluttermap is not None:
+            data=data-self.cluttermap
+
         # Plot the echo data
         ctx.new_path()
         ctx.move_to(0,int(self.screenHeight-data[0]))
@@ -214,6 +219,15 @@ class sounder:
             self.txpipeline.set_state(Gst.State.PAUSED)
         return True
 
+    def clutter_cb(self,event):
+        if self.cluttercheck.get_active():
+            # Capture clutter map
+            self.cluttermap=self.data_snapshot
+        else:
+            # Clear clutter map
+            self.cluttermap=None
+        return True
+
     def size_allocate_event(self,event,data=None):
         if self.width == None or self.height == None:
             self.width=data.width
@@ -238,6 +252,7 @@ class sounder:
         self.dataBlock=numpy.zeros(int(self.blocks*self.blockSize/2))
         self.averagingWindow=10
         self.corr_data=numpy.zeros((int(self.blockSize/2*self.blocks),self.averagingWindow))
+        self.cluttermap=None
 
         # Window boilerplate
         self.window.set_title("Sounder")
@@ -322,7 +337,11 @@ class sounder:
         self.centercheck=Gtk.CheckButton(label='Center');
         self.centercheck.set_active(True)
         vbox.pack_start(self.centercheck,True,True,0)
-
+        self.cluttercheck=Gtk.CheckButton(label='Clutter map');
+        self.cluttercheck.set_active(False)
+        self.cluttercheck.connect('toggled',self.clutter_cb)
+        vbox.pack_start(self.cluttercheck,True,True,0)
+        
         hbox2=Gtk.HBox(homogeneous=True,spacing=0)
         button=Gtk.Button(label='AVG+')
         button.connect('clicked',self.avg_up)
