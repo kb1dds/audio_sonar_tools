@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# 
 # Audio spectrum analyzer
 
 # Copyright (c) 2011, 2022 Michael Robinson
@@ -79,26 +80,26 @@ class gtkSpec:
 
         # Erase current display
         ctx.set_source_rgb(0,0,0)
-        ctx.rectangle(0,0,512,380)
+        ctx.rectangle(0,0,self.screenWidth,self.screenHeight)
         ctx.fill()
         if( self.mode == 2 ):
             # Draw markers
             ctx.set_source_rgb(1,0,0)
             ctx.new_path()
             ctx.move_to(self.marker1,0)
-            ctx.line_to(self.marker1,380)
+            ctx.line_to(self.marker1,self.screenHeight)
             ctx.stroke()
 
             ctx.set_source_rgb(0,1,0)
             ctx.new_path()
             ctx.move_to(self.marker2,0)
-            ctx.line_to(self.marker2,380)
+            ctx.line_to(self.marker2,self.screenHeight)
             ctx.stroke()
             
             ctx.set_source_rgb(0,0,1)
             ctx.new_path()
             ctx.move_to(self.marker3,0)
-            ctx.line_to(self.marker3,380)
+            ctx.line_to(self.marker3,self.screenHeight)
             ctx.stroke()
 
             # Draw autocorrelation
@@ -107,7 +108,7 @@ class gtkSpec:
             data=20*numpy.log10(0.01+abs(ifft(data_fft*conj(data_fft))))
             data[data<-20]=-20
             data=data+20
-            data=data[range(0,511)]
+            data=data[range(0,self.screenWidth-1)]
 
             # Magnitude readouts
             self.marker1_mag.set_text(str(data[int(self.marker1)])+' dB')
@@ -115,9 +116,9 @@ class gtkSpec:
             self.marker3_mag.set_text(str(data[int(self.marker3)])+' dB')
 
             ctx.new_path()
-            ctx.move_to(0,int(380-data[0]))
+            ctx.move_to(0,int(self.screenHeight-data[0]))
             for i,e in enumerate(data):
-                ctx.line_to(i,int(380-e))
+                ctx.line_to(i,int(self.screenHeight-e))
             
             ctx.stroke()
         if( self.mode == 0 or self.mode == 1 or self.mode == 3): # Frequency domain preproc
@@ -126,7 +127,7 @@ class gtkSpec:
             # Adjust data for better plotting
             data[data<-20]=-20
             data=data+20
-            data=data[range(0,511)]
+            data=data[range(0,self.screenWidth-1)]
 
             # Magnitude readouts
             self.marker1_mag.set_text(str(data[int(self.marker1)])+' dB')
@@ -134,7 +135,7 @@ class gtkSpec:
             self.marker3_mag.set_text(str(data[int(self.marker3)])+' dB')
 
         if( self.mode == 3 ):
-            self.spectrogram[1:379,:]=self.spectrogram[0:378,:]
+            self.spectrogram[1:(self.screenHeight-1),:]=self.spectrogram[0:(self.screenHeight-2),:]
             self.spectrogram[0,:]=data*2
             dat = numpy.array(self.spectrogram, dtype=numpy.uint8)
             dat.shape=(dat.shape[0],dat.shape[1],1)
@@ -144,7 +145,7 @@ class gtkSpec:
             ctx.paint()
 
         else:
-            self.spectrogram=numpy.zeros((380,511))
+            self.spectrogram=numpy.zeros((self.screenHeight,self.screenWidth-1))
 
         if( self.mode == 0 or self.mode == 3 ):
             # Draw markers
@@ -152,19 +153,19 @@ class gtkSpec:
             ctx.set_source_rgb(1,0,0)
             ctx.new_path()
             ctx.move_to(self.marker1,0)
-            ctx.line_to(self.marker1,380)
+            ctx.line_to(self.marker1,self.screenHeight)
             ctx.stroke()
 
             ctx.set_source_rgb(0,1,0)
             ctx.new_path()
             ctx.move_to(self.marker2,0)
-            ctx.line_to(self.marker2,380)
+            ctx.line_to(self.marker2,self.screenHeight)
             ctx.stroke()
             
             ctx.set_source_rgb(0,0,1)
             ctx.new_path()
             ctx.move_to(self.marker3,0)
-            ctx.line_to(self.marker3,380)
+            ctx.line_to(self.marker3,self.screenHeight)
             ctx.stroke()
 
 
@@ -172,9 +173,9 @@ class gtkSpec:
             # Draw spectrum
             ctx.set_source_rgb(1,1,1)
             ctx.new_path()
-            ctx.move_to(0,int(380-data[0]))
+            ctx.move_to(0,int(self.screenHeight-data[0]))
             for i,e in enumerate(data):
-                ctx.line_to(i,int(380-e))
+                ctx.line_to(i,int(self.screenHeight-e))
             
             ctx.stroke()
 
@@ -184,12 +185,12 @@ class gtkSpec:
             marker2val=int(max(abs(data_fft[self.marker2-5:self.marker2+5])))
             newpt=(marker1val,marker2val)
             self.track.append(newpt)
-            scale=scale_track(self.track,512,380)
+            scale=scale_track(self.track,self.screenWidth,self.screenHeight)
 
             ctx.set_source_rgb(1,1,1)
             for x in self.track:
-                ctx.move_to(int(x[0]*scale),int(x[1]*scale))
-                ctx.close_path()
+                ctx.new_path()
+                ctx.arc(int(x[0]*scale),int(x[1]*scale),2,0,6.28319)
                 ctx.stroke()
             
             ctx.set_source_rgb(0,1,0)
@@ -234,6 +235,24 @@ class gtkSpec:
 
         return True
 
+    def size_allocate_event(self,event,data=None):
+        if self.width == None or self.height == None:
+            self.width=data.width
+            self.height=data.height
+        else:
+            # Rebuild the screen
+            self.screenHeight+=data.height-self.height
+            self.screenWidth+=data.width-self.width
+
+            self.screen.set_size_request(self.screenWidth,self.screenHeight)
+            if (data.width-self.width) !=0 or (data.height-self.height) != 0:
+                self.spectrogram=numpy.zeros((self.screenHeight,self.screenWidth-1))
+                
+            self.width=data.width
+            self.height=data.height
+   
+        return True
+
     def __init__(self):
         self.window = Gtk.Window()
 
@@ -241,21 +260,28 @@ class gtkSpec:
         self.blockSize=2048
         self.blocks=1
         self.sampleRate=44100
+        self.screenWidth=512
+        self.screenHeight=380
+
         self.dataBlock=numpy.zeros(int(self.blocks*self.blockSize/2))
-        self.spectrogram=numpy.zeros((380,511))
+        self.spectrogram=numpy.zeros((self.screenHeight,self.screenWidth-1))
 
         # Window boilerplate
         self.window.set_title("Python Spectrum Analyzer")
         self.window.connect("delete_event",self.delete_event)
         self.window.connect("destroy",self.destroy_event)
+        self.window.connect("size-allocate",self.size_allocate_event)
         self.window.set_border_width(5)
+        self.width=None
+        self.height=None
 
         # Display area boilerplate
         self.screen=Gtk.DrawingArea()
-        self.screen.set_size_request(512,380)
+        self.screen.set_size_request(self.screenWidth,self.screenHeight)
         self.screen.connect("button_press_event",self.button_cb)
         self.screen.add_events( Gdk.EventMask.BUTTON_PRESS_MASK )
         self.screen.connect("draw",self.update_display)
+        
 
         self.marker1=100
         self.marker2=200
